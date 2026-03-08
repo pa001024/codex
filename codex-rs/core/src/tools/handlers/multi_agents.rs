@@ -86,6 +86,7 @@ impl ToolHandler for MultiAgentHandler {
 
         match tool_name.as_str() {
             "spawn_agent" => spawn::handle(session, turn, call_id, arguments).await,
+            "list_agents" => list_agents::handle(session, turn, arguments).await,
             "send_input" => send_input::handle(session, turn, call_id, arguments).await,
             "resume_agent" => resume_agent::handle(session, turn, call_id, arguments).await,
             "wait" => wait::handle(session, turn, call_id, arguments).await,
@@ -94,6 +95,66 @@ impl ToolHandler for MultiAgentHandler {
                 "unsupported collab tool {other}"
             ))),
         }
+    }
+}
+
+mod list_agents {
+    use super::*;
+    use std::sync::Arc;
+
+    #[derive(Debug, Deserialize, Default)]
+    struct ListAgentsArgs {}
+
+    #[derive(Debug, Serialize)]
+    struct ListAgentsResult {
+        agents: Vec<ListAgentEntry>,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct ListAgentEntry {
+        agent_id: String,
+        nickname: Option<String>,
+        agent_role: Option<String>,
+        status: AgentStatus,
+        total_token_usage: Option<codex_protocol::protocol::TokenUsage>,
+    }
+
+    pub async fn handle(
+        session: Arc<Session>,
+        _turn: Arc<TurnContext>,
+        arguments: String,
+    ) -> Result<ToolOutput, FunctionCallError> {
+        let _: ListAgentsArgs = parse_arguments(&arguments)?;
+        let agents = session
+            .services
+            .agent_control
+            .list_subagents(session.conversation_id)
+            .await;
+        let mut entries = Vec::with_capacity(agents.len());
+        for agent in agents {
+            let total_token_usage = session
+                .services
+                .agent_control
+                .get_total_token_usage(agent.thread_id)
+                .await;
+            entries.push(ListAgentEntry {
+                agent_id: agent.thread_id.to_string(),
+                nickname: agent.agent_nickname,
+                agent_role: agent.agent_role,
+                status: agent.status,
+                total_token_usage,
+            });
+        }
+
+        let content =
+            serde_json::to_string(&ListAgentsResult { agents: entries }).map_err(|err| {
+                FunctionCallError::Fatal(format!("failed to serialize list_agents result: {err}"))
+            })?;
+
+        Ok(ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(content),
+            success: Some(true),
+        })
     }
 }
 
@@ -1366,6 +1427,86 @@ mod tests {
                 .as_deref()
                 .is_some_and(|nickname| !nickname.is_empty())
         );
+        assert_eq!(success, Some(true));
+    }
+
+    #[tokio::test]
+    async fn list_agents_returns_spawned_subagents_for_current_thread() {
+        #[derive(Debug, Deserialize)]
+        struct SpawnAgentResult {
+            agent_id: String,
+            nickname: Option<String>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct ListAgentsResult {
+            agents: Vec<ListAgentEntry>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct ListAgentEntry {
+            agent_id: String,
+            nickname: Option<String>,
+            agent_role: Option<String>,
+            status: AgentStatus,
+        }
+
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+
+        let spawn_output = MultiAgentHandler
+            .handle(invocation(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                "spawn_agent",
+                function_payload(json!({"message": "hello"})),
+            ))
+            .await
+            .expect("spawn should succeed");
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(spawn_content),
+            ..
+        } = spawn_output
+        else {
+            panic!("expected function output");
+        };
+        let spawned: SpawnAgentResult =
+            serde_json::from_str(&spawn_content).expect("spawn result should be json");
+
+        let output = MultiAgentHandler
+            .handle(invocation(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                "list_agents",
+                function_payload(json!({})),
+            ))
+            .await
+            .expect("list_agents should succeed");
+
+        let ToolOutput::Function {
+            body: FunctionCallOutputBody::Text(content),
+            success,
+            ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        let listed: ListAgentsResult =
+            serde_json::from_str(&content).expect("list_agents result should be json");
+        let entry = listed
+            .agents
+            .into_iter()
+            .find(|entry| entry.agent_id == spawned.agent_id)
+            .expect("spawned agent should be listed");
+        assert_eq!(entry.nickname, spawned.nickname);
+        assert_eq!(entry.agent_role, None);
+        assert!(matches!(
+            entry.status,
+            AgentStatus::PendingInit | AgentStatus::Running
+        ));
         assert_eq!(success, Some(true));
     }
 

@@ -15,6 +15,7 @@ use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CollabAgentStatusEntry;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -378,6 +379,43 @@ impl AgentControl {
             return None;
         };
         thread.total_token_usage().await
+    }
+
+    pub(crate) async fn list_subagents(
+        &self,
+        parent_thread_id: ThreadId,
+    ) -> Vec<CollabAgentStatusEntry> {
+        let Ok(state) = self.upgrade() else {
+            return Vec::new();
+        };
+
+        let mut agents = Vec::new();
+        for thread_id in state.list_thread_ids().await {
+            let Ok(thread) = state.get_thread(thread_id).await else {
+                continue;
+            };
+            let snapshot = thread.config_snapshot().await;
+            let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: agent_parent_thread_id,
+                agent_nickname,
+                agent_role,
+                ..
+            }) = snapshot.session_source
+            else {
+                continue;
+            };
+            if agent_parent_thread_id != parent_thread_id {
+                continue;
+            }
+            agents.push(CollabAgentStatusEntry {
+                thread_id,
+                agent_nickname,
+                agent_role,
+                status: thread.agent_status().await,
+            });
+        }
+        agents.sort_by(|a, b| a.thread_id.to_string().cmp(&b.thread_id.to_string()));
+        agents
     }
 
     pub(crate) async fn format_environment_context_subagents(

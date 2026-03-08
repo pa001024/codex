@@ -428,6 +428,7 @@ impl AsyncManagedClient {
         server_name: String,
         config: McpServerConfig,
         store_mode: OAuthCredentialsStoreMode,
+        codex_session_id: String,
         cancel_token: CancellationToken,
         tx_event: Sender<Event>,
         elicitation_requests: ElicitationRequestManager,
@@ -449,8 +450,15 @@ impl AsyncManagedClient {
                     return Err(error.into());
                 }
 
-                let client =
-                    Arc::new(make_rmcp_client(&server_name, config.transport, store_mode).await?);
+                let client = Arc::new(
+                    make_rmcp_client(
+                        &server_name,
+                        config.transport,
+                        store_mode,
+                        &codex_session_id,
+                    )
+                    .await?,
+                );
                 match start_server_task(
                     server_name,
                     client,
@@ -629,6 +637,7 @@ impl McpConnectionManager {
         store_mode: OAuthCredentialsStoreMode,
         auth_entries: HashMap<String, McpAuthStatusEntry>,
         approval_policy: &Constrained<AskForApproval>,
+        codex_session_id: String,
         tx_event: Sender<Event>,
         initial_sandbox_state: SandboxState,
         codex_home: PathBuf,
@@ -667,6 +676,7 @@ impl McpConnectionManager {
                 server_name.clone(),
                 cfg,
                 store_mode,
+                codex_session_id.clone(),
                 cancel_token.clone(),
                 tx_event.clone(),
                 elicitation_requests.clone(),
@@ -1403,6 +1413,7 @@ async fn make_rmcp_client(
     server_name: &str,
     transport: McpServerTransportConfig,
     store_mode: OAuthCredentialsStoreMode,
+    codex_session_id: &str,
 ) -> Result<RmcpClient, StartupOutcomeError> {
     match transport {
         McpServerTransportConfig::Stdio {
@@ -1420,10 +1431,13 @@ async fn make_rmcp_client(
         }
         McpServerTransportConfig::StreamableHttp {
             url,
-            http_headers,
+            mut http_headers,
             env_http_headers,
             bearer_token_env_var,
         } => {
+            http_headers
+                .get_or_insert_with(HashMap::new)
+                .insert("X-Codex-Session".to_string(), codex_session_id.to_string());
             let resolved_bearer_token =
                 match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
                     Ok(token) => token,

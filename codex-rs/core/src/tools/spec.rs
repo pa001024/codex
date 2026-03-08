@@ -958,6 +958,21 @@ fn create_send_input_tool() -> ToolSpec {
     })
 }
 
+fn create_list_agents_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "list_agents".to_string(),
+        description:
+            "List the currently open sub-agents spawned from the active thread, including ids and last known status."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_resume_agent_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -2020,11 +2035,13 @@ pub(crate) fn build_specs(
     if config.collab_tools {
         let multi_agent_handler = Arc::new(MultiAgentHandler);
         builder.push_spec(create_spawn_agent_tool(config));
+        builder.push_spec(create_list_agents_tool());
         builder.push_spec(create_send_input_tool());
         builder.push_spec(create_resume_agent_tool());
         builder.push_spec(create_wait_tool());
         builder.push_spec(create_close_agent_tool());
         builder.register_handler("spawn_agent", multi_agent_handler.clone());
+        builder.register_handler("list_agents", multi_agent_handler.clone());
         builder.register_handler("send_input", multi_agent_handler.clone());
         builder.register_handler("resume_agent", multi_agent_handler.clone());
         builder.register_handler("wait", multi_agent_handler.clone());
@@ -2329,6 +2346,7 @@ mod tests {
             &tools,
             &[
                 "spawn_agent",
+                "list_agents",
                 "send_input",
                 "wait",
                 "close_agent",
@@ -2377,6 +2395,7 @@ mod tests {
             &tools,
             &[
                 "spawn_agent",
+                "list_agents",
                 "send_input",
                 "resume_agent",
                 "wait",
