@@ -210,6 +210,72 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
 }
 
 #[tokio::test]
+async fn list_agents_returns_spawned_subagents_for_current_thread() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        agent_id: String,
+        nickname: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ListAgentsResult {
+        agents: Vec<ListAgentEntry>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ListAgentEntry {
+        agent_id: String,
+        nickname: Option<String>,
+        agent_role: Option<String>,
+        status: AgentStatus,
+    }
+
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let spawn_output = SpawnAgentHandler
+        .handle(invocation(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            "spawn_agent",
+            function_payload(json!({"message": "hello"})),
+        ))
+        .await
+        .expect("spawn should succeed");
+    let (spawn_content, _) = expect_text_output(spawn_output);
+    let spawned: SpawnAgentResult =
+        serde_json::from_str(&spawn_content).expect("spawn result should be json");
+
+    let output = ListAgentsHandler
+        .handle(invocation(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            "list_agents",
+            function_payload(json!({})),
+        ))
+        .await
+        .expect("list_agents should succeed");
+    let (content, success) = expect_text_output(output);
+    let listed: ListAgentsResult =
+        serde_json::from_str(&content).expect("list_agents result should be json");
+    let entry = listed
+        .agents
+        .into_iter()
+        .find(|entry| entry.agent_id == spawned.agent_id)
+        .expect("spawned agent should be listed");
+    assert_eq!(entry.nickname, spawned.nickname);
+    assert_eq!(entry.agent_role, None);
+    assert!(matches!(
+        entry.status,
+        AgentStatus::PendingInit | AgentStatus::Running
+    ));
+    assert_eq!(success, Some(true));
+}
+
+#[tokio::test]
 async fn spawn_agent_errors_when_manager_dropped() {
     let (session, turn) = make_session_and_context().await;
     let invocation = invocation(

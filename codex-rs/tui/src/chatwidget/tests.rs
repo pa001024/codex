@@ -8039,6 +8039,90 @@ async fn fast_status_indicator_is_hidden_for_non_gpt54_model() {
 }
 
 #[tokio::test]
+async fn loop_slash_command_supports_toggle_and_status() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Loop);
+    assert!(chat.loop_mode_enabled, "expected /loop to enable loop mode");
+
+    chat.dispatch_command_with_args(SlashCommand::Loop, "status".to_string(), Vec::new());
+    chat.dispatch_command_with_args(SlashCommand::Loop, "off".to_string(), Vec::new());
+
+    assert!(
+        !chat.loop_mode_enabled,
+        "expected /loop off to disable loop mode"
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>();
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Loop mode enabled.")),
+        "expected enable message, got {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Loop mode is on.")),
+        "expected status message, got {rendered:?}"
+    );
+    assert!(
+        rendered
+            .iter()
+            .any(|line| line.contains("Loop mode disabled.")),
+        "expected disable message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn loop_mode_auto_submits_continue_after_task_complete() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.loop_mode_enabled = true;
+
+    chat.on_task_started();
+    chat.on_task_complete(Some("done".to_string()), false);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "continue".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn loop_mode_respects_queued_user_input() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.loop_mode_enabled = true;
+
+    chat.on_task_started();
+    chat.queue_user_message(UserMessage::from("ship it"));
+    chat.on_task_complete(None, false);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "ship it".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued Op::UserTurn, got {other:?}"),
+    }
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
 async fn fast_status_indicator_is_hidden_when_fast_mode_is_off() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     set_chatgpt_auth(&mut chat);

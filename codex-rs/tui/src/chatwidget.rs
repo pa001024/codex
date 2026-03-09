@@ -616,6 +616,7 @@ pub(crate) struct ChatWidget {
     retry_status_header: Option<String>,
     // Set when commentary output completes; once stream queues go idle we restore the status row.
     pending_status_indicator_restore: bool,
+    loop_mode_enabled: bool,
     suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
@@ -777,6 +778,7 @@ pub(crate) struct ThreadInputState {
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     agent_turn_running: bool,
+    loop_mode_enabled: bool,
 }
 
 impl From<String> for UserMessage {
@@ -1645,6 +1647,16 @@ impl ChatWidget {
         let had_pending_steers = !self.pending_steers.is_empty();
         self.refresh_pending_input_preview();
 
+        if !from_replay
+            && self.loop_mode_enabled
+            && self.pending_steers.is_empty()
+            && self.queued_user_messages.is_empty()
+            && !self.is_review_mode
+        {
+            self.queued_user_messages
+                .push_back(UserMessage::from("continue"));
+        }
+
         if !from_replay && self.queued_user_messages.is_empty() && !had_pending_steers {
             self.maybe_prompt_plan_implementation();
         }
@@ -1661,6 +1673,17 @@ impl ChatWidget {
         });
 
         self.maybe_show_pending_rate_limit_prompt();
+    }
+
+    fn set_loop_mode_enabled(&mut self, enabled: bool) {
+        self.loop_mode_enabled = enabled;
+        let status = if enabled { "enabled" } else { "disabled" };
+        let detail = if enabled {
+            Some("Codex will auto-send `continue` after each completed turn.".to_string())
+        } else {
+            Some("Codex will stop auto-sending follow-up turns.".to_string())
+        };
+        self.add_info_message(format!("Loop mode {status}."), detail);
     }
 
     fn maybe_prompt_plan_implementation(&mut self) {
@@ -2163,6 +2186,7 @@ impl ChatWidget {
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             agent_turn_running: self.agent_turn_running,
+            loop_mode_enabled: self.loop_mode_enabled,
         })
     }
 
@@ -2171,6 +2195,7 @@ impl ChatWidget {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.agent_turn_running = input_state.agent_turn_running;
+            self.loop_mode_enabled = input_state.loop_mode_enabled;
             self.update_collaboration_mode_indicator();
             self.refresh_model_display();
             if let Some(composer) = input_state.composer {
@@ -2204,6 +2229,7 @@ impl ChatWidget {
                 .extend(input_state.queued_user_messages);
         } else {
             self.agent_turn_running = false;
+            self.loop_mode_enabled = false;
             self.pending_steers.clear();
             self.set_remote_image_urls(Vec::new());
             self.bottom_pane.set_composer_text_with_mention_bindings(
@@ -3276,6 +3302,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            loop_mode_enabled: false,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -3461,6 +3488,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            loop_mode_enabled: false,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -3638,6 +3666,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            loop_mode_enabled: false,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -4021,6 +4050,9 @@ impl ChatWidget {
                 };
                 self.set_service_tier_selection(next_tier);
             }
+            SlashCommand::Loop => {
+                self.set_loop_mode_enabled(!self.loop_mode_enabled);
+            }
             SlashCommand::Realtime => {
                 if !self.realtime_conversation_enabled() {
                     return;
@@ -4319,6 +4351,23 @@ impl ChatWidget {
                     }
                     _ => {
                         self.add_error_message("Usage: /fast [on|off|status]".to_string());
+                    }
+                }
+            }
+            SlashCommand::Loop => {
+                if trimmed.is_empty() {
+                    self.dispatch_command(cmd);
+                    return;
+                }
+                match trimmed.to_ascii_lowercase().as_str() {
+                    "on" => self.set_loop_mode_enabled(true),
+                    "off" => self.set_loop_mode_enabled(false),
+                    "status" => {
+                        let status = if self.loop_mode_enabled { "on" } else { "off" };
+                        self.add_info_message(format!("Loop mode is {status}."), None);
+                    }
+                    _ => {
+                        self.add_error_message("Usage: /loop [on|off|status]".to_string());
                     }
                 }
             }

@@ -16,6 +16,7 @@ pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
 use codex_connectors::AllConnectorsCacheKey;
 use codex_connectors::DirectoryListResponse;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::SandboxPolicy;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
@@ -211,6 +212,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries,
         &config.permissions.approval_policy,
+        ThreadId::new().to_string(),
         tx_event,
         sandbox_state,
         config.codex_home.clone(),

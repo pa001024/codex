@@ -49,6 +49,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub(crate) use close_agent::Handler as CloseAgentHandler;
+pub(crate) use list_agents::Handler as ListAgentsHandler;
 pub(crate) use resume_agent::Handler as ResumeAgentHandler;
 pub(crate) use send_input::Handler as SendInputHandler;
 pub(crate) use spawn::Handler as SpawnAgentHandler;
@@ -103,6 +104,99 @@ where
     serde_json::to_value(value).unwrap_or_else(|err| {
         JsonValue::String(format!("failed to serialize {tool_name} result: {err}"))
     })
+}
+
+mod list_agents {
+    use super::*;
+
+    pub(crate) struct Handler;
+
+    #[async_trait]
+    impl ToolHandler for Handler {
+        type Output = ListAgentsResult;
+
+        fn kind(&self) -> ToolKind {
+            ToolKind::Function
+        }
+
+        fn matches_kind(&self, payload: &ToolPayload) -> bool {
+            matches!(payload, ToolPayload::Function { .. })
+        }
+
+        async fn handle(
+            &self,
+            invocation: ToolInvocation,
+        ) -> Result<Self::Output, FunctionCallError> {
+            let ToolInvocation {
+                session,
+                turn,
+                payload,
+                ..
+            } = invocation;
+            let arguments = function_arguments(payload)?;
+            let _: ListAgentsArgs = parse_arguments(&arguments)?;
+            let agents = session
+                .services
+                .agent_control
+                .list_subagents(session.conversation_id)
+                .await;
+            let mut entries = Vec::with_capacity(agents.len());
+            for agent in agents {
+                let total_token_usage = session
+                    .services
+                    .agent_control
+                    .get_total_token_usage(agent.thread_id)
+                    .await;
+                entries.push(ListAgentEntry {
+                    agent_id: agent.thread_id.to_string(),
+                    nickname: agent.agent_nickname,
+                    agent_role: agent.agent_role,
+                    status: agent.status,
+                    total_token_usage,
+                });
+            }
+
+            turn.session_telemetry
+                .counter("codex.multi_agent.list", 1, &[]);
+
+            Ok(ListAgentsResult { agents: entries })
+        }
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct ListAgentsArgs {}
+
+    #[derive(Debug, Serialize)]
+    pub(crate) struct ListAgentsResult {
+        agents: Vec<ListAgentEntry>,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct ListAgentEntry {
+        agent_id: String,
+        nickname: Option<String>,
+        agent_role: Option<String>,
+        status: AgentStatus,
+        total_token_usage: Option<codex_protocol::protocol::TokenUsage>,
+    }
+
+    impl ToolOutput for ListAgentsResult {
+        fn log_preview(&self) -> String {
+            tool_output_json_text(self, "list_agents")
+        }
+
+        fn success_for_logging(&self) -> bool {
+            true
+        }
+
+        fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+            tool_output_response_item(call_id, payload, self, Some(true), "list_agents")
+        }
+
+        fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+            tool_output_code_mode_result(self, "list_agents")
+        }
+    }
 }
 
 mod spawn {

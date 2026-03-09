@@ -1273,6 +1273,23 @@ fn create_send_input_tool() -> ToolSpec {
     })
 }
 
+fn create_list_agents_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "list_agents".to_string(),
+        description:
+            "List the currently open sub-agents spawned from the active thread, including ids and last known status."
+                .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
+
 fn create_resume_agent_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -2436,6 +2453,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
     use crate::tools::handlers::multi_agents::CloseAgentHandler;
+    use crate::tools::handlers::multi_agents::ListAgentsHandler;
     use crate::tools::handlers::multi_agents::ResumeAgentHandler;
     use crate::tools::handlers::multi_agents::SendInputHandler;
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
@@ -2816,6 +2834,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
         push_tool_spec(
             &mut builder,
+            create_list_agents_tool(),
+            false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
             create_send_input_tool(),
             false,
             config.code_mode_enabled,
@@ -2839,6 +2863,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             config.code_mode_enabled,
         );
         builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
+        builder.register_handler("list_agents", Arc::new(ListAgentsHandler));
         builder.register_handler("send_input", Arc::new(SendInputHandler));
         builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
         builder.register_handler("wait", Arc::new(WaitHandler));
